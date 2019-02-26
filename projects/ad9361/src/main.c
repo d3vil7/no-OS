@@ -294,7 +294,8 @@ AD9361_InitParam default_init_param = {
 	/* External LO clocks */
 	NULL,	//(*ad9361_rfpll_ext_recalc_rate)()
 	NULL,	//(*ad9361_rfpll_ext_round_rate)()
-	NULL	//(*ad9361_rfpll_ext_set_rate)()
+	NULL,	//(*ad9361_rfpll_ext_set_rate)()
+	NULL,	//spi_desc *spi
 };
 
 AD9361_RXFIRConfig rx_fir_config = {	// BPF PASSBAND 3/20 fs to 1/4 fs
@@ -354,12 +355,15 @@ struct ad9361_rf_phy *ad9361_phy;
 #ifdef FMCOMMS5
 struct ad9361_rf_phy *ad9361_phy_b;
 #endif
+#define CLK_CS			0x0f
+struct spi_init_param spi_param = {.id = SPI_DEVICE_ID, .mode = SPI_MODE_1, .chip_select = CLK_CS, .flags = 0};
 
 /***************************************************************************//**
  * @brief main
 *******************************************************************************/
 int main(void)
 {
+	int32_t status;
 #ifdef XILINX_PLATFORM
 	Xil_ICacheEnable();
 	Xil_DCacheEnable();
@@ -393,7 +397,11 @@ int main(void)
 #endif
 	gpio_direction(default_init_param.gpio_resetb, 1);
 
-	spi_init(SPI_DEVICE_ID, 1, 0);
+	status = spi_init(&default_init_param.spi, &spi_param);
+	if (status != SUCCESS) {
+		printf("spi_init() error: %ld\n", status);
+		return status;
+	}
 
 	if (AD9364_DEVICE)
 		default_init_param.dev_sel = ID_AD9364;
