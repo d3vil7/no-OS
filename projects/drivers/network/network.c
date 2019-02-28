@@ -42,7 +42,7 @@
 #include "uthash.h"
 #include "lwip_init.h"
 #include "network.h"
-#include "fifo.h"
+#include "comm_util.h"
 
 #if defined (__arm__) || defined (__aarch64__)
 #include "xil_printf.h"
@@ -65,7 +65,7 @@ struct network_instance {
 	UT_hash_handle hh;         /* makes this structure hashable */
 };
 
-static struct fifo *network_fifo;
+static struct fifo *network_fifo = NULL;
 static struct network_instance *instances = NULL;
 
 err_t network_accept(void *arg, struct tcp_pcb *newpcb, err_t err);
@@ -88,6 +88,7 @@ void network_keep_alive(void)
 *******************************************************************************/
 int32_t network_init(void)
 {
+	set_keep_alive(lwip_keep_alive);
 	return init_lwip();
 }
 
@@ -247,7 +248,7 @@ void network_store(struct tcp_pcb *tpcb, struct network_instance *es)
 		ptr = es->p;
 		plen = ptr->len;
 
-		insert_tail(&network_fifo, ptr->payload, ptr->len, es->instance_id);
+		fifo_insert_tail(&network_fifo, ptr->payload, ptr->len, es->instance_id);
 		/* continue with next pbuf in chain (if any) */
 		es->p = ptr->next;
 		if(es->p != NULL) {
@@ -270,7 +271,7 @@ void network_store(struct tcp_pcb *tpcb, struct network_instance *es)
 void network_close(struct tcp_pcb *tpcb, struct network_instance *es)
 {
 	while(network_fifo) {
-		network_fifo = remove_head(network_fifo);
+		network_fifo = fifo_remove_head(network_fifo);
 	}
 	tcp_arg(tpcb, NULL);
 	tcp_sent(tpcb, NULL);
@@ -289,40 +290,7 @@ void network_close(struct tcp_pcb *tpcb, struct network_instance *es)
 *******************************************************************************/
 int32_t network_read_line(int32_t *instance_id, char *buf, size_t len)
 {
-	int32_t length = 0;
-	char *data = NULL;
-	while(network_fifo == NULL) {
-		lwip_keep_alive();
-	}
-
-	data = network_fifo->data;
-	char* end = strstr(data, "\r\n");
-	if(end && end == data) { /* \r\n on first pos */
-		network_fifo->len -= 2;
-		data += 2;
-		end = strstr(data, "\r\n");
-	}
-	*instance_id = network_fifo->instance_id;
-	if(end) {
-		length = end - data;
-		memcpy(buf, data, length);
-		buf[length] = '\0';
-		if(length + 2 >= network_fifo->len) {
-			network_fifo = remove_head(network_fifo);
-		} else {
-			network_fifo->len = network_fifo->len - length - 2;
-			char * remaining = malloc(network_fifo->len);
-			memcpy(remaining, (end + 2), network_fifo->len);
-			free(network_fifo->data);
-			network_fifo->data = remaining;
-		}
-	} else {
-		memcpy(buf, network_fifo->data, network_fifo->len);
-		buf[length] = '\0';
-		network_fifo = remove_head(network_fifo);
-	}
-
-	return length;
+	return comm_read_line(&network_fifo, instance_id, buf, len);
 }
 
 /***************************************************************************//**
@@ -330,40 +298,7 @@ int32_t network_read_line(int32_t *instance_id, char *buf, size_t len)
 *******************************************************************************/
 int32_t network_read(int32_t *instance_id, char *buf, size_t len)
 {
-	int32_t temp_len = 0;
-	while(network_fifo == NULL) {
-		lwip_keep_alive();
-	}
-	if(network_fifo) {
-		*instance_id = network_fifo->instance_id;
-		if(network_fifo->len == len) {
-			memcpy(buf, network_fifo->data, len);
-			network_fifo = remove_head(network_fifo);
-			temp_len =  len;
-		} else if (network_fifo->len < len) {
-			char *pbuf = buf;
-			do {
-				if(network_fifo) {
-					memcpy(pbuf, network_fifo->data, network_fifo->len);
-					pbuf = pbuf + network_fifo->len;
-					temp_len += network_fifo->len;
-					network_fifo = remove_head(network_fifo);
-				}
-				if(temp_len < len)
-					lwip_keep_alive();
-			} while(temp_len < len);
-		} else {
-			memcpy(buf, network_fifo->data, len);
-			network_fifo->len = network_fifo->len - len; /* new length */
-			char * remaining = malloc(network_fifo->len);
-			memcpy(remaining, network_fifo->data + len, network_fifo->len);
-			free(network_fifo->data);
-			network_fifo->data = remaining;
-			temp_len =  len;
-		}
-	}
-
-	return temp_len;
+	return comm_read(&network_fifo, instance_id, buf, len);
 }
 
 /***************************************************************************//**
